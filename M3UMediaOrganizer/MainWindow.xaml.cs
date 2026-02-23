@@ -264,14 +264,11 @@ public partial class MainWindow : Window
             using var cts = new CancellationTokenSource();
             var items = await _parser.ParseByBytesAsync(path, prog, cts.Token);
 
-            using (_view.DeferRefresh())
+            _allItems.Clear();
+            foreach (var it in items)
             {
-                _allItems.Clear();
-                foreach (var it in items)
-                {
-                    it.SearchHay = (it.Title + " " + it.GroupTitle + " " + it.SourceUrl).ToLowerInvariant();
-                    _allItems.Add(it);
-                }
+                it.SearchHay = (it.Title + " " + it.GroupTitle + " " + it.SourceUrl).ToLowerInvariant();
+                _allItems.Add(it);
             }
 
             if (!string.IsNullOrWhiteSpace(_root))
