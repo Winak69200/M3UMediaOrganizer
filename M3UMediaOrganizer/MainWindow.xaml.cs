@@ -33,6 +33,11 @@ public partial class MainWindow : Window
     string _root = "";
     string _m3uPath = "";
     string _searchText = "";
+    string _typeFilter = "Tout afficher";
+    string _genreFilter = "Tous genres";
+    string _seasonFilter = "Toutes saisons";
+    string _extFilter = "Toutes";
+    bool _hideExisting;
 
     CancellationTokenSource? _downloadCts;
     bool _isDownloading;
@@ -71,10 +76,11 @@ public partial class MainWindow : Window
         _searchTimer.Tick += (_, _) =>
         {
             _searchTimer.Stop();
-            _view.Refresh();
+            ApplyFilters();
         };
 
         RebuildFilters();
+        UpdateFilterCache();
     }
 
     // -------------------------
@@ -99,8 +105,8 @@ public partial class MainWindow : Window
 
         LblM3UProgress.Text = $"Indexation OK : {_existingIndex.Count} fichiers";
         RefreshComputedFields();
-        _view.Refresh();
         RebuildFilters();
+        ApplyFilters();
     }
 
     private async void BtnOpenM3U_Click(object sender, RoutedEventArgs e)
@@ -258,9 +264,15 @@ public partial class MainWindow : Window
             using var cts = new CancellationTokenSource();
             var items = await _parser.ParseByBytesAsync(path, prog, cts.Token);
 
-            _allItems.Clear();
-            foreach (var it in items)
-                _allItems.Add(it);
+            using (_view.DeferRefresh())
+            {
+                _allItems.Clear();
+                foreach (var it in items)
+                {
+                    it.SearchHay = (it.Title + " " + it.GroupTitle + " " + it.SourceUrl).ToLowerInvariant();
+                    _allItems.Add(it);
+                }
+            }
 
             if (!string.IsNullOrWhiteSpace(_root))
             {
@@ -273,7 +285,7 @@ public partial class MainWindow : Window
             LblM3UProgress.Text = $"Chargement M3U : terminé | Items: {_allItems.Count}";
 
             RebuildFilters();
-            _view.Refresh();
+            ApplyFilters();
 
             if (showSuccessMessage)
                 WpfMessageBox.Show($"Chargé : {_allItems.Count} entrées", "M3U", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -297,43 +309,36 @@ public partial class MainWindow : Window
 
     private void CmbType_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (_view is null) return;
-        _view.Refresh();
+        ApplyFilters();
     }
 
     private void CmbGenre_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (_view is null) return;
-        _view.Refresh();
+        ApplyFilters();
     }
 
     private void CmbSeason_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (_view is null) return;
-        _view.Refresh();
+        ApplyFilters();
     }
 
     private void CmbExt_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (_view is null) return;
-        _view.Refresh();
+        ApplyFilters();
     }
 
     private void ChkHideExisting_Click(object sender, RoutedEventArgs e)
     {
-        if (_view is null) return;
-        _view.Refresh();
+        ApplyFilters();
     }
 
     private bool FilterItem(object obj)
     {
         if (obj is not M3uItem it) return false;
 
-        bool hideExisting = ChkHideExisting.IsChecked == true;
-        if (hideExisting && it.Exists) return false;
+        if (_hideExisting && it.Exists) return false;
 
-        string typeFilter = GetSelectedComboText(CmbType, "Tout afficher");
-        switch (typeFilter)
+        switch (_typeFilter)
         {
             case "Films + Séries":
                 if (it.MediaType is not ("Film" or "Serie")) return false;
@@ -346,41 +351,38 @@ public partial class MainWindow : Window
                 break;
         }
 
-        string genreFilter = GetSelectedComboText(CmbGenre, "Tous genres");
-        if (!string.IsNullOrWhiteSpace(genreFilter) && genreFilter != "Tous genres")
+        if (!string.IsNullOrWhiteSpace(_genreFilter) && _genreFilter != "Tous genres")
         {
-            if (genreFilter == "(Sans genre)")
+            if (_genreFilter == "(Sans genre)")
             {
                 if (!string.IsNullOrWhiteSpace(it.GroupTitle)) return false;
             }
             else
             {
-                if (!string.Equals(it.GroupTitle ?? "", genreFilter, StringComparison.Ordinal)) return false;
+                if (!string.Equals(it.GroupTitle ?? "", _genreFilter, StringComparison.Ordinal)) return false;
             }
         }
 
-        string seasonFilter = GetSelectedComboText(CmbSeason, "Toutes saisons");
-        if (seasonFilter != "Toutes saisons")
+        if (_seasonFilter != "Toutes saisons")
         {
-            if (seasonFilter == "(Sans saison)")
+            if (_seasonFilter == "(Sans saison)")
             {
                 if (it.Season.HasValue) return false;
             }
             else
             {
-                if (!int.TryParse(seasonFilter, out int selectedSeason) || it.Season != selectedSeason)
+                if (!int.TryParse(_seasonFilter, out int selectedSeason) || it.Season != selectedSeason)
                     return false;
             }
         }
 
-        string extFilter = GetSelectedComboText(CmbExt, "Toutes");
-        if (extFilter != "Toutes")
+        if (_extFilter != "Toutes")
         {
-            if (extFilter == "(Sans extension)")
+            if (_extFilter == "(Sans extension)")
             {
                 if (!string.IsNullOrWhiteSpace(it.Ext)) return false;
             }
-            else if (!string.Equals((it.Ext ?? ""), extFilter, StringComparison.OrdinalIgnoreCase))
+            else if (!string.Equals((it.Ext ?? ""), _extFilter, StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
@@ -388,10 +390,7 @@ public partial class MainWindow : Window
 
         if (!string.IsNullOrWhiteSpace(_searchText))
         {
-            if (string.IsNullOrWhiteSpace(it.SearchHay))
-                it.SearchHay = ((it.Title + " " + it.GroupTitle + " " + it.SourceUrl).ToLowerInvariant());
-
-            if (!it.SearchHay.Contains(_searchText, StringComparison.OrdinalIgnoreCase))
+            if (!it.SearchHay.Contains(_searchText, StringComparison.Ordinal))
                 return false;
         }
 
@@ -455,7 +454,7 @@ public partial class MainWindow : Window
         LblM3UProgress.Text = $"Indexation OK : {_existingIndex.Count} fichiers";
         RefreshComputedFields();
         RebuildFilters();
-        _view.Refresh();
+        ApplyFilters();
         GridItems.Items.Refresh();
     }
 
@@ -653,6 +652,24 @@ public partial class MainWindow : Window
             .FirstOrDefault(x => string.Equals((string?)x.Content, currentExt, StringComparison.Ordinal));
         if (foundExt is not null) CmbExt.SelectedItem = foundExt;
         else CmbExt.SelectedIndex = 0;
+
+        UpdateFilterCache();
+    }
+
+    private void UpdateFilterCache()
+    {
+        _typeFilter = GetSelectedComboText(CmbType, "Tout afficher");
+        _genreFilter = GetSelectedComboText(CmbGenre, "Tous genres");
+        _seasonFilter = GetSelectedComboText(CmbSeason, "Toutes saisons");
+        _extFilter = GetSelectedComboText(CmbExt, "Toutes");
+        _hideExisting = ChkHideExisting.IsChecked == true;
+    }
+
+    private void ApplyFilters()
+    {
+        if (_view is null) return;
+        UpdateFilterCache();
+        _view.Refresh();
     }
 
     // -------------------------

@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="M3U Media Organizer - Download"
-        Height="820" Width="1590"
+        Height="820" Width="1820"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="10">
         <Grid.RowDefinitions>
@@ -17,24 +17,24 @@
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
             <Button x:Name="BtnOpenM3U" Content="Ouvrir M3U..." Width="120" Margin="0,0,10,0" Click="BtnOpenM3U_Click"/>
             <TextBlock Text="URL M3U :" VerticalAlignment="Center"/>
-            <TextBox x:Name="TxtM3UUrl" Width="360" Margin="8,0,8,0"/>
-            <Button x:Name="BtnLoadM3UUrl" Content="Charger URL" Width="110" Margin="0,0,12,0" Click="BtnLoadM3UUrl_Click"/>
+            <TextBox x:Name="TxtM3UUrl" Width="280" Margin="6,0,6,0"/>
+            <Button x:Name="BtnLoadM3UUrl" Content="Charger URL" Width="100" Margin="0,0,8,0" Click="BtnLoadM3UUrl_Click"/>
             <TextBlock Text="Fichier :" VerticalAlignment="Center"/>
-            <TextBox x:Name="TxtM3UPath" Width="340" Margin="8,0,18,0" IsReadOnly="True"/>
+            <TextBox x:Name="TxtM3UPath" Width="220" Margin="6,0,10,0" IsReadOnly="True"/>
             <TextBlock Text="Recherche :" VerticalAlignment="Center"/>
-            <TextBox x:Name="TxtSearch" Width="320" Margin="8,0,18,0" TextChanged="TxtSearch_TextChanged"/>
-            <CheckBox x:Name="ChkHideExisting" Content="Masquer déjà présents" VerticalAlignment="Center" Margin="0,0,12,0"
+            <TextBox x:Name="TxtSearch" Width="220" Margin="6,0,10,0" TextChanged="TxtSearch_TextChanged"/>
+            <CheckBox x:Name="ChkHideExisting" Content="Masquer présents" VerticalAlignment="Center" Margin="0,0,6,0"
                       Click="ChkHideExisting_Click"/>
         </StackPanel>
 
         <!-- Row 1 -->
         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-            <Button x:Name="BtnPickRoot" Content="Dossier de téléchargement..." Width="190" Margin="0,0,10,0" Click="BtnPickRoot_Click"/>
+            <Button x:Name="BtnPickRoot" Content="Dossier..." Width="100" Margin="0,0,6,0" Click="BtnPickRoot_Click"/>
             <TextBlock Text="Root :" VerticalAlignment="Center"/>
-            <TextBox x:Name="TxtRoot" Width="256" Margin="8,0,18,0" IsReadOnly="True"/>
+            <TextBox x:Name="TxtRoot" Width="170" Margin="6,0,10,0" IsReadOnly="True"/>
 
             <TextBlock Text="Type :" VerticalAlignment="Center"/>
-            <ComboBox x:Name="CmbType" Width="170" Margin="8,0,18,0" SelectionChanged="CmbType_SelectionChanged">
+            <ComboBox x:Name="CmbType" Width="120" Margin="6,0,10,0" SelectionChanged="CmbType_SelectionChanged">
                 <ComboBoxItem Content="Tout afficher" IsSelected="True"/>
                 <ComboBoxItem Content="Films + Séries"/>
                 <ComboBoxItem Content="Séries"/>
@@ -42,24 +42,24 @@
             </ComboBox>
 
             <TextBlock Text="Genre :" VerticalAlignment="Center"/>
-            <ComboBox x:Name="CmbGenre" Width="260" Margin="8,0,18,0" IsTextSearchEnabled="True"
+            <ComboBox x:Name="CmbGenre" Width="180" Margin="6,0,10,0" IsTextSearchEnabled="True"
                       SelectionChanged="CmbGenre_SelectionChanged">
                 <ComboBoxItem Content="Tous genres" IsSelected="True"/>
             </ComboBox>
 
             <TextBlock Text="Saison :" VerticalAlignment="Center"/>
-            <ComboBox x:Name="CmbSeason" Width="140" Margin="8,0,18,0" SelectionChanged="CmbSeason_SelectionChanged">
+            <ComboBox x:Name="CmbSeason" Width="100" Margin="6,0,10,0" SelectionChanged="CmbSeason_SelectionChanged">
                 <ComboBoxItem Content="Toutes saisons" IsSelected="True"/>
             </ComboBox>
 
             <TextBlock Text="Extension :" VerticalAlignment="Center"/>
-            <ComboBox x:Name="CmbExt" Width="120" Margin="8,0,18,0" SelectionChanged="CmbExt_SelectionChanged">
+            <ComboBox x:Name="CmbExt" Width="90" Margin="6,0,10,0" SelectionChanged="CmbExt_SelectionChanged">
                 <ComboBoxItem Content="Toutes" IsSelected="True"/>
             </ComboBox>
 
-            <Button x:Name="BtnSelectAll" Content="Tout sélectionner" Width="130" Margin="0,0,8,0" Click="BtnSelectAll_Click"/>
-            <Button x:Name="BtnSelectOnly" Content="Sélectionner la sélection" Width="210" Margin="0,0,8,0" Click="BtnSelectOnly_Click"/>
-            <Button x:Name="BtnSelectNone" Content="Tout désélectionner" Width="150" Click="BtnSelectNone_Click"/>
+            <Button x:Name="BtnSelectAll" Content="Tout" Width="70" Margin="0,0,6,0" Click="BtnSelectAll_Click"/>
+            <Button x:Name="BtnSelectOnly" Content="Sélection" Width="90" Margin="0,0,6,0" Click="BtnSelectOnly_Click"/>
+            <Button x:Name="BtnSelectNone" Content="Aucun" Width="70" Click="BtnSelectNone_Click"/>
         </StackPanel>
 
         <!-- Row 2 -->
