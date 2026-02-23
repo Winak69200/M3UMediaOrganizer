@@ -16,8 +16,11 @@
         <!-- Row 0 -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
             <Button x:Name="BtnOpenM3U" Content="Ouvrir M3U..." Width="120" Margin="0,0,10,0" Click="BtnOpenM3U_Click"/>
+            <TextBlock Text="URL M3U :" VerticalAlignment="Center"/>
+            <TextBox x:Name="TxtM3UUrl" Width="360" Margin="8,0,8,0"/>
+            <Button x:Name="BtnLoadM3UUrl" Content="Charger URL" Width="110" Margin="0,0,12,0" Click="BtnLoadM3UUrl_Click"/>
             <TextBlock Text="Fichier :" VerticalAlignment="Center"/>
-            <TextBox x:Name="TxtM3UPath" Width="520" Margin="8,0,18,0" IsReadOnly="True"/>
+            <TextBox x:Name="TxtM3UPath" Width="340" Margin="8,0,18,0" IsReadOnly="True"/>
             <TextBlock Text="Recherche :" VerticalAlignment="Center"/>
             <TextBox x:Name="TxtSearch" Width="320" Margin="8,0,18,0" TextChanged="TxtSearch_TextChanged"/>
             <CheckBox x:Name="ChkHideExisting" Content="Masquer déjà présents" VerticalAlignment="Center" Margin="0,0,12,0"
@@ -42,6 +45,16 @@
             <ComboBox x:Name="CmbGenre" Width="260" Margin="8,0,18,0" IsTextSearchEnabled="True"
                       SelectionChanged="CmbGenre_SelectionChanged">
                 <ComboBoxItem Content="Tous genres" IsSelected="True"/>
+            </ComboBox>
+
+            <TextBlock Text="Saison :" VerticalAlignment="Center"/>
+            <ComboBox x:Name="CmbSeason" Width="140" Margin="8,0,18,0" SelectionChanged="CmbSeason_SelectionChanged">
+                <ComboBoxItem Content="Toutes saisons" IsSelected="True"/>
+            </ComboBox>
+
+            <TextBlock Text="Extension :" VerticalAlignment="Center"/>
+            <ComboBox x:Name="CmbExt" Width="120" Margin="8,0,18,0" SelectionChanged="CmbExt_SelectionChanged">
+                <ComboBoxItem Content="Toutes" IsSelected="True"/>
             </ComboBox>
 
             <Button x:Name="BtnSelectAll" Content="Tout sélectionner" Width="130" Margin="0,0,8,0" Click="BtnSelectAll_Click"/>
