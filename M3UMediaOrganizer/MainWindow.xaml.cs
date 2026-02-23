@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,7 +27,7 @@ public partial class MainWindow : Window
 
     readonly M3uParser _parser = new();
     readonly TiviMateDownloader _downloader = new();
-    static readonly HttpClient _http = new();
+    static readonly HttpClient _http = CreateM3uHttpClient();
 
     HashSet<string>? _existingIndex;
     string _root = "";
@@ -38,6 +39,21 @@ public partial class MainWindow : Window
 
     // throttle recherche
     readonly System.Windows.Threading.DispatcherTimer _searchTimer;
+
+    private static HttpClient CreateM3uHttpClient()
+    {
+        var handler = new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli
+        };
+
+        var client = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(60)
+        };
+
+        return client;
+    }
 
     public MainWindow()
     {
@@ -151,35 +167,74 @@ public partial class MainWindow : Window
     {
         PbM3U.IsIndeterminate = false;
         PbM3U.Value = 0;
-        LblM3UProgress.Text = "Téléchargement M3U URL : démarrage...";
 
-        using var response = await _http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead);
-        response.EnsureSuccessStatusCode();
+        const int maxAttempts = 3;
+        Exception? lastError = null;
 
-        var total = response.Content.Headers.ContentLength;
-        await using var input = await response.Content.ReadAsStreamAsync();
-        await using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 64, useAsync: true);
-
-        var buffer = new byte[1024 * 64];
-        long read = 0;
-        int n;
-        while ((n = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            await output.WriteAsync(buffer, 0, n);
-            read += n;
+            try
+            {
+                LblM3UProgress.Text = $"Téléchargement M3U URL : tentative {attempt}/{maxAttempts}...";
 
-            if (total.GetValueOrDefault() > 0)
-            {
-                int percent = (int)Math.Min(100, Math.Round(read / (double)total.Value * 100, 0));
-                PbM3U.Value = percent;
-                LblM3UProgress.Text = $"Téléchargement M3U URL : {percent}% | {read}/{total.Value} bytes";
+                using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+                request.Headers.TryAddWithoutValidation("User-Agent", "ExoPlayer/2.19.1");
+                request.Headers.TryAddWithoutValidation("Accept", "application/vnd.apple.mpegurl, */*");
+                request.Headers.Referrer = new Uri(uri.GetLeftPart(UriPartial.Authority) + "/");
+                request.Headers.TryAddWithoutValidation("Icy-MetaData", "1");
+                request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
+                request.Headers.TryAddWithoutValidation("Pragma", "no-cache");
+
+                using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                response.EnsureSuccessStatusCode();
+
+                var total = response.Content.Headers.ContentLength;
+                await using var input = await response.Content.ReadAsStreamAsync();
+                await using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 64, useAsync: true);
+
+                var buffer = new byte[1024 * 64];
+                long read = 0;
+                int n;
+                while ((n = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    await output.WriteAsync(buffer, 0, n);
+                    read += n;
+
+                    if (total.GetValueOrDefault() > 0)
+                    {
+                        int percent = (int)Math.Min(100, Math.Round(read / (double)total.Value * 100, 0));
+                        PbM3U.IsIndeterminate = false;
+                        PbM3U.Value = percent;
+                        LblM3UProgress.Text = $"Téléchargement M3U URL : tentative {attempt}/{maxAttempts} | {percent}% | {read}/{total.Value} bytes";
+                    }
+                    else
+                    {
+                        PbM3U.IsIndeterminate = true;
+                        LblM3UProgress.Text = $"Téléchargement M3U URL : tentative {attempt}/{maxAttempts} | {read} bytes";
+                    }
+                }
+
+                var writtenBytes = new FileInfo(destinationPath).Length;
+                if (writtenBytes < 100)
+                    throw new InvalidDataException("Playlist vide ou invalide (moins de 100 bytes).");
+
+                PbM3U.IsIndeterminate = false;
+                PbM3U.Value = 100;
+                LblM3UProgress.Text = $"Téléchargement M3U URL : OK ({writtenBytes} bytes)";
+                return;
             }
-            else
+            catch (Exception ex)
             {
-                PbM3U.IsIndeterminate = true;
-                LblM3UProgress.Text = $"Téléchargement M3U URL : {read} bytes";
+                lastError = ex;
+                if (attempt >= maxAttempts)
+                    break;
+
+                LblM3UProgress.Text = $"Téléchargement M3U URL : échec tentative {attempt}/{maxAttempts} ({ex.Message}). Nouvelle tentative...";
+                await Task.Delay(TimeSpan.FromSeconds(3));
             }
         }
+
+        throw new HttpRequestException("Impossible de télécharger la playlist M3U après 3 tentatives.", lastError);
     }
 
     private async Task LoadM3uFromFileAsync(string path, bool showSuccessMessage = true)
