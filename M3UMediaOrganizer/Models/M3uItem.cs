@@ -28,7 +28,7 @@ public sealed class M3uItem : INotifyPropertyChanged
     public string SearchHay
     {
         get => _searchHay;
-        set { _searchHay = value; OnPropertyChanged(); }
+        set { _searchHay = value; }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
