@@ -4,6 +4,8 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -25,16 +27,38 @@ public partial class MainWindow : Window
 
     readonly M3uParser _parser = new();
     readonly TiviMateDownloader _downloader = new();
+    static readonly HttpClient _http = CreateM3uHttpClient();
 
     HashSet<string>? _existingIndex;
     string _root = "";
     string _m3uPath = "";
+    string _searchText = "";
+    string _typeFilter = "Tout afficher";
+    string _genreFilter = "Tous genres";
+    string _seasonFilter = "Toutes saisons";
+    string _extFilter = "Toutes";
+    bool _hideExisting;
 
     CancellationTokenSource? _downloadCts;
     bool _isDownloading;
 
     // throttle recherche
     readonly System.Windows.Threading.DispatcherTimer _searchTimer;
+
+    private static HttpClient CreateM3uHttpClient()
+    {
+        var handler = new HttpClientHandler
+        {
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli
+        };
+
+        var client = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(60)
+        };
+
+        return client;
+    }
 
     public MainWindow()
     {
@@ -52,10 +76,11 @@ public partial class MainWindow : Window
         _searchTimer.Tick += (_, _) =>
         {
             _searchTimer.Stop();
-            _view.Refresh();
+            ApplyFilters();
         };
 
-        RebuildGenreList();
+        RebuildFilters();
+        UpdateFilterCache();
     }
 
     // -------------------------
@@ -80,8 +105,8 @@ public partial class MainWindow : Window
 
         LblM3UProgress.Text = $"Indexation OK : {_existingIndex.Count} fichiers";
         RefreshComputedFields();
-        _view.Refresh();
-        RebuildGenreList();
+        RebuildFilters();
+        ApplyFilters();
     }
 
     private async void BtnOpenM3U_Click(object sender, RoutedEventArgs e)
@@ -93,10 +118,136 @@ public partial class MainWindow : Window
         };
         if (dlg.ShowDialog() != true) return;
 
-        _m3uPath = dlg.FileName;
-        TxtM3UPath.Text = _m3uPath;
+        try
+        {
+            _m3uPath = dlg.FileName;
+            TxtM3UPath.Text = _m3uPath;
+            await LoadM3uFromFileAsync(_m3uPath);
+        }
+        catch (Exception ex)
+        {
+            WpfMessageBox.Show($"Impossible de parser le M3U.\n\n{ex.Message}", "Erreur M3U", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void BtnLoadM3UUrl_Click(object sender, RoutedEventArgs e)
+    {
+        var rawUrl = (TxtM3UUrl.Text ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(rawUrl))
+        {
+            WpfMessageBox.Show("Saisis une URL M3U valide.", "Info", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            WpfMessageBox.Show("URL invalide (http/https attendu).", "Erreur URL", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
 
         BtnOpenM3U.IsEnabled = false;
+        BtnLoadM3UUrl.IsEnabled = false;
+
+        string? tempFile = null;
+        try
+        {
+            tempFile = Path.Combine(Path.GetTempPath(), $"m3u_{Guid.NewGuid():N}.m3u8");
+            await DownloadM3uToFileAsync(uri, tempFile);
+            TxtM3UPath.Text = $"{uri} (temp)";
+            await LoadM3uFromFileAsync(tempFile, showSuccessMessage: true);
+        }
+        catch (Exception ex)
+        {
+            WpfMessageBox.Show($"Impossible de charger le M3U via URL.\n\n{ex.Message}", "Erreur URL M3U", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            BtnOpenM3U.IsEnabled = true;
+            BtnLoadM3UUrl.IsEnabled = true;
+            if (!string.IsNullOrWhiteSpace(tempFile) && File.Exists(tempFile))
+                File.Delete(tempFile);
+        }
+    }
+
+    private async Task DownloadM3uToFileAsync(Uri uri, string destinationPath)
+    {
+        PbM3U.IsIndeterminate = false;
+        PbM3U.Value = 0;
+
+        const int maxAttempts = 3;
+        Exception? lastError = null;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                LblM3UProgress.Text = $"Téléchargement M3U URL : tentative {attempt}/{maxAttempts}...";
+
+                using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+                request.Headers.TryAddWithoutValidation("User-Agent", "ExoPlayer/2.19.1");
+                request.Headers.TryAddWithoutValidation("Accept", "application/vnd.apple.mpegurl, */*");
+                request.Headers.Referrer = new Uri(uri.GetLeftPart(UriPartial.Authority) + "/");
+                request.Headers.TryAddWithoutValidation("Icy-MetaData", "1");
+                request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
+                request.Headers.TryAddWithoutValidation("Pragma", "no-cache");
+
+                using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                response.EnsureSuccessStatusCode();
+
+                var total = response.Content.Headers.ContentLength;
+                await using var input = await response.Content.ReadAsStreamAsync();
+                await using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 64, useAsync: true);
+
+                var buffer = new byte[1024 * 64];
+                long read = 0;
+                int n;
+                while ((n = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    await output.WriteAsync(buffer, 0, n);
+                    read += n;
+
+                    if (total.GetValueOrDefault() > 0)
+                    {
+                        int percent = (int)Math.Min(100, Math.Round(read / (double)total.Value * 100, 0));
+                        PbM3U.IsIndeterminate = false;
+                        PbM3U.Value = percent;
+                        LblM3UProgress.Text = $"Téléchargement M3U URL : tentative {attempt}/{maxAttempts} | {percent}% | {read}/{total.Value} bytes";
+                    }
+                    else
+                    {
+                        PbM3U.IsIndeterminate = true;
+                        LblM3UProgress.Text = $"Téléchargement M3U URL : tentative {attempt}/{maxAttempts} | {read} bytes";
+                    }
+                }
+
+                var writtenBytes = new FileInfo(destinationPath).Length;
+                if (writtenBytes < 100)
+                    throw new InvalidDataException("Playlist vide ou invalide (moins de 100 bytes).");
+
+                PbM3U.IsIndeterminate = false;
+                PbM3U.Value = 100;
+                LblM3UProgress.Text = $"Téléchargement M3U URL : OK ({writtenBytes} bytes)";
+                return;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                if (attempt >= maxAttempts)
+                    break;
+
+                LblM3UProgress.Text = $"Téléchargement M3U URL : échec tentative {attempt}/{maxAttempts} ({ex.Message}). Nouvelle tentative...";
+                await Task.Delay(TimeSpan.FromSeconds(3));
+            }
+        }
+
+        throw new HttpRequestException("Impossible de télécharger la playlist M3U après 3 tentatives.", lastError);
+    }
+
+    private async Task LoadM3uFromFileAsync(string path, bool showSuccessMessage = true)
+    {
+        BtnOpenM3U.IsEnabled = false;
+        BtnLoadM3UUrl.IsEnabled = false;
+
         PbM3U.IsIndeterminate = false;
         PbM3U.Value = 0;
         LblM3UProgress.Text = "Chargement M3U : démarrage...";
@@ -111,36 +262,35 @@ public partial class MainWindow : Window
             });
 
             using var cts = new CancellationTokenSource();
-
-            // Parse en background
-            var items = await _parser.ParseByBytesAsync(_m3uPath, prog, cts.Token);
+            var items = await _parser.ParseByBytesAsync(path, prog, cts.Token);
 
             _allItems.Clear();
             foreach (var it in items)
+            {
+                it.SearchHay = (it.Title + " " + it.GroupTitle + " " + it.SourceUrl).ToLowerInvariant();
                 _allItems.Add(it);
+            }
 
-            // si root déjà choisi → recalcul + exists
             if (!string.IsNullOrWhiteSpace(_root))
             {
                 _existingIndex ??= ExistingIndex.Build(_root);
                 RefreshComputedFields();
             }
 
+            PbM3U.IsIndeterminate = false;
             PbM3U.Value = 100;
             LblM3UProgress.Text = $"Chargement M3U : terminé | Items: {_allItems.Count}";
 
-            RebuildGenreList();
-            _view.Refresh();
+            RebuildFilters();
+            ApplyFilters();
 
-            WpfMessageBox.Show($"Chargé : {_allItems.Count} entrées", "M3U", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-        catch (Exception ex)
-        {
-            WpfMessageBox.Show($"Impossible de parser le M3U.\n\n{ex.Message}", "Erreur M3U", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (showSuccessMessage)
+                WpfMessageBox.Show($"Chargé : {_allItems.Count} entrées", "M3U", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         finally
         {
             BtnOpenM3U.IsEnabled = true;
+            BtnLoadM3UUrl.IsEnabled = true;
         }
     }
 
@@ -149,37 +299,43 @@ public partial class MainWindow : Window
     // -------------------------
     private void TxtSearch_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
+        _searchText = (TxtSearch.Text ?? "").Trim().ToLowerInvariant();
         _searchTimer.Stop();
         _searchTimer.Start();
     }
 
     private void CmbType_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (_view is null) return;
-        _view.Refresh();
+        ApplyFilters();
     }
 
     private void CmbGenre_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (_view is null) return;
-        _view.Refresh();
+        ApplyFilters();
+    }
+
+    private void CmbSeason_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        ApplyFilters();
+    }
+
+    private void CmbExt_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        ApplyFilters();
     }
 
     private void ChkHideExisting_Click(object sender, RoutedEventArgs e)
     {
-        if (_view is null) return;
-        _view.Refresh();
+        ApplyFilters();
     }
 
     private bool FilterItem(object obj)
     {
         if (obj is not M3uItem it) return false;
 
-        bool hideExisting = ChkHideExisting.IsChecked == true;
-        if (hideExisting && it.Exists) return false;
+        if (_hideExisting && it.Exists) return false;
 
-        string typeFilter = GetSelectedComboText(CmbType, "Tout afficher");
-        switch (typeFilter)
+        switch (_typeFilter)
         {
             case "Films + Séries":
                 if (it.MediaType is not ("Film" or "Serie")) return false;
@@ -192,26 +348,46 @@ public partial class MainWindow : Window
                 break;
         }
 
-        string genreFilter = GetSelectedComboText(CmbGenre, "Tous genres");
-        if (!string.IsNullOrWhiteSpace(genreFilter) && genreFilter != "Tous genres")
+        if (!string.IsNullOrWhiteSpace(_genreFilter) && _genreFilter != "Tous genres")
         {
-            if (genreFilter == "(Sans genre)")
+            if (_genreFilter == "(Sans genre)")
             {
                 if (!string.IsNullOrWhiteSpace(it.GroupTitle)) return false;
             }
             else
             {
-                if (!string.Equals(it.GroupTitle ?? "", genreFilter, StringComparison.Ordinal)) return false;
+                if (!string.Equals(it.GroupTitle ?? "", _genreFilter, StringComparison.Ordinal)) return false;
             }
         }
 
-        var s = (TxtSearch.Text ?? "").Trim();
-        if (!string.IsNullOrWhiteSpace(s))
+        if (_seasonFilter != "Toutes saisons")
         {
-            if (string.IsNullOrWhiteSpace(it.SearchHay))
-                it.SearchHay = ((it.Title + " " + it.GroupTitle + " " + it.SourceUrl).ToLowerInvariant());
+            if (_seasonFilter == "(Sans saison)")
+            {
+                if (it.Season.HasValue) return false;
+            }
+            else
+            {
+                if (!int.TryParse(_seasonFilter, out int selectedSeason) || it.Season != selectedSeason)
+                    return false;
+            }
+        }
 
-            if (!it.SearchHay.Contains(s.ToLowerInvariant(), StringComparison.OrdinalIgnoreCase))
+        if (_extFilter != "Toutes")
+        {
+            if (_extFilter == "(Sans extension)")
+            {
+                if (!string.IsNullOrWhiteSpace(it.Ext)) return false;
+            }
+            else if (!string.Equals((it.Ext ?? ""), _extFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(_searchText))
+        {
+            if (!it.SearchHay.Contains(_searchText, StringComparison.Ordinal))
                 return false;
         }
 
@@ -274,8 +450,8 @@ public partial class MainWindow : Window
 
         LblM3UProgress.Text = $"Indexation OK : {_existingIndex.Count} fichiers";
         RefreshComputedFields();
-        RebuildGenreList();
-        _view.Refresh();
+        RebuildFilters();
+        ApplyFilters();
         GridItems.Items.Refresh();
     }
 
@@ -284,9 +460,11 @@ public partial class MainWindow : Window
     // -------------------------
     private void BtnSelectAll_Click(object sender, RoutedEventArgs e)
     {
-        foreach (var it in _view.Cast<M3uItem>())
-            it.Selected = true;
-        _view.Refresh();
+        using (_view.DeferRefresh())
+        {
+            foreach (var it in _view.Cast<M3uItem>())
+                it.Selected = true;
+        }
     }
 
     private void BtnSelectOnly_Click(object sender, RoutedEventArgs e)
@@ -294,17 +472,20 @@ public partial class MainWindow : Window
         var sel = GridItems.SelectedItems.Cast<M3uItem>().ToArray();
         if (sel.Length == 0) return;
 
-        foreach (var it in sel)
-            it.Selected = true;
-
-        _view.Refresh();
+        using (_view.DeferRefresh())
+        {
+            foreach (var it in sel)
+                it.Selected = true;
+        }
     }
 
     private void BtnSelectNone_Click(object sender, RoutedEventArgs e)
     {
-        foreach (var it in _view.Cast<M3uItem>())
-            it.Selected = false;
-        _view.Refresh();
+        using (_view.DeferRefresh())
+        {
+            foreach (var it in _view.Cast<M3uItem>())
+                it.Selected = false;
+        }
     }
 
     // -------------------------
@@ -420,9 +601,11 @@ public partial class MainWindow : Window
     // -------------------------
     // Genres
     // -------------------------
-    private void RebuildGenreList()
+    private void RebuildFilters()
     {
         var current = GetSelectedComboText(CmbGenre, "Tous genres");
+        var currentSeason = GetSelectedComboText(CmbSeason, "Toutes saisons");
+        var currentExt = GetSelectedComboText(CmbExt, "Toutes");
 
         CmbGenre.Items.Clear();
         CmbGenre.Items.Add(new System.Windows.Controls.ComboBoxItem { Content = "Tous genres" });
@@ -442,6 +625,48 @@ public partial class MainWindow : Window
 
         if (found is not null) CmbGenre.SelectedItem = found;
         else CmbGenre.SelectedIndex = 0;
+
+        CmbSeason.Items.Clear();
+        CmbSeason.Items.Add(new System.Windows.Controls.ComboBoxItem { Content = "Toutes saisons" });
+        CmbSeason.Items.Add(new System.Windows.Controls.ComboBoxItem { Content = "(Sans saison)" });
+
+        foreach (var season in _allItems.Where(x => x.Season.HasValue).Select(x => x.Season!.Value).Distinct().OrderBy(x => x))
+            CmbSeason.Items.Add(new System.Windows.Controls.ComboBoxItem { Content = season.ToString() });
+
+        var foundSeason = CmbSeason.Items.OfType<System.Windows.Controls.ComboBoxItem>()
+            .FirstOrDefault(x => string.Equals((string?)x.Content, currentSeason, StringComparison.Ordinal));
+        if (foundSeason is not null) CmbSeason.SelectedItem = foundSeason;
+        else CmbSeason.SelectedIndex = 0;
+
+        CmbExt.Items.Clear();
+        CmbExt.Items.Add(new System.Windows.Controls.ComboBoxItem { Content = "Toutes" });
+        CmbExt.Items.Add(new System.Windows.Controls.ComboBoxItem { Content = "(Sans extension)" });
+
+        foreach (var ext in _allItems.Select(x => x.Ext).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x))
+            CmbExt.Items.Add(new System.Windows.Controls.ComboBoxItem { Content = ext });
+
+        var foundExt = CmbExt.Items.OfType<System.Windows.Controls.ComboBoxItem>()
+            .FirstOrDefault(x => string.Equals((string?)x.Content, currentExt, StringComparison.Ordinal));
+        if (foundExt is not null) CmbExt.SelectedItem = foundExt;
+        else CmbExt.SelectedIndex = 0;
+
+        UpdateFilterCache();
+    }
+
+    private void UpdateFilterCache()
+    {
+        _typeFilter = GetSelectedComboText(CmbType, "Tout afficher");
+        _genreFilter = GetSelectedComboText(CmbGenre, "Tous genres");
+        _seasonFilter = GetSelectedComboText(CmbSeason, "Toutes saisons");
+        _extFilter = GetSelectedComboText(CmbExt, "Toutes");
+        _hideExisting = ChkHideExisting.IsChecked == true;
+    }
+
+    private void ApplyFilters()
+    {
+        if (_view is null) return;
+        UpdateFilterCache();
+        _view.Refresh();
     }
 
     // -------------------------
